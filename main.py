@@ -37,6 +37,14 @@ def end(game_state: typing.Dict):
     print("GAME OVER\n")
 
 
+def is_growing(snake):
+    return snake["body"][-1] == snake["body"][-2]
+
+
+def is_me(snake, me):
+    return snake["id"] == me["id"]
+
+
 def eliminate_out_of_bounds_moves(move_coordinates_dict, board_width, board_height):
     # Find and eliminate any moves that would send the snake out of bounds
     for direction in list(move_coordinates_dict.keys()):
@@ -57,34 +65,52 @@ def eliminate_backwards_move(move_coordinates_dict, my_neck):
     return move_coordinates_dict
 
 
-def eliminate_self_collision_moves(move_coordinates_dict, my_body):
-    # Find and remove any moves that would collide with self
+def eliminate_snake_collision_moves(move_coordinates_dict, snake):
+    # Find and remove any moves that would collide with a snake
+    # Account for the fact that the tail space will be vacated if the snake isn't growing
     for direction in list(move_coordinates_dict.keys()):
-        if move_coordinates_dict[direction]["coordinates"] in my_body:
+        if move_coordinates_dict[direction]["coordinates"] in get_snake_body_next_turn(snake):
             del move_coordinates_dict[direction]
     return move_coordinates_dict
 
 
-def eliminate_enemy_collision_moves(move_coordinates_dict, my_length, enemy_snakes):
-    # Find and remove any moves that would collide with enemy snakes
-    for direction in list(move_coordinates_dict.keys()):
-        for enemy_snake in enemy_snakes:
-            # First check if you're going to hit the enemy snake as it exists now
-            if move_coordinates_dict[direction]["coordinates"] in enemy_snake["body"]:
-                del move_coordinates_dict[direction]
-                break
-            enemy_snake_head = enemy_snake["head"]
-            possible_head_on_collision_coordinates = [
-                {"x": enemy_snake_head["x"] + 1, "y": enemy_snake_head["y"]},
-                {"x": enemy_snake_head["x"] - 1, "y": enemy_snake_head["y"]},
-                {"x": enemy_snake_head["x"], "y": enemy_snake_head["y"] + 1},
-                {"x": enemy_snake_head["x"], "y": enemy_snake_head["y"] - 1},
-            ]
-            # Check for head-on collisions (both snakes move into the same space)
-            # A head-on collision can be won if you're longer than the other snake, so play chicken in that case.
-            if (move_coordinates_dict[direction]["coordinates"] in possible_head_on_collision_coordinates
-                    and enemy_snake["length"] >= my_length):
-                move_coordinates_dict[direction]["possible_head_on_collision"] = True
+def get_snake_body_next_turn(snake):
+    snake_body = snake["body"][:-1]
+    if is_growing(snake):
+        snake_body.append(snake["body"][-1])
+    # print(snake_body)
+    return snake_body
+
+
+def evaluate_head_on_collisions(move_coordinates_dict, snake, me):
+    snake_head = snake["head"]
+    my_length = me["length"]
+    possible_head_on_collision_coordinates = [
+        {"x": snake_head["x"] + 1, "y": snake_head["y"]},
+        {"x": snake_head["x"] - 1, "y": snake_head["y"]},
+        {"x": snake_head["x"], "y": snake_head["y"] + 1},
+        {"x": snake_head["x"], "y": snake_head["y"] - 1},
+    ]
+    # Mark any possible head-on collisions according to their type.
+    # The type depends on the relative lengths of the snakes involved.
+    for direction in move_coordinates_dict:
+        if move_coordinates_dict[direction]["coordinates"] in possible_head_on_collision_coordinates:
+            if snake["length"] < my_length:
+                move_coordinates_dict[direction]["collision_type"] = "winning"
+            elif snake["length"] == my_length:
+                move_coordinates_dict[direction]["collision_type"] = "equal"
+            else:
+                move_coordinates_dict[direction]["collision_type"] = "losing"
+    return move_coordinates_dict
+
+
+def eliminate_collision_moves(move_coordinates_dict, snakes, me):
+    # Find and remove any moves that would collide with snakes (including myself)
+    for snake in snakes:
+        move_coordinates_dict = eliminate_snake_collision_moves(move_coordinates_dict, snake)
+    # Also evaluate moves that might be head on collisions
+    for snake in [x for x in snakes if not is_me(x, me)]:
+        move_coordinates_dict = evaluate_head_on_collisions(move_coordinates_dict, snake, me)
     return move_coordinates_dict
 
 
@@ -95,7 +121,7 @@ def create_map(width, height, snakes):
     for i in range(height):
         board_map.append(board_row[:])
     for snake in snakes:
-        for coordinate in snake["body"]:
+        for coordinate in get_snake_body_next_turn(snake):
             board_map[coordinate["y"]][coordinate["x"]] = 1
     return board_map
 
@@ -149,27 +175,56 @@ def calculate_distance_between(first_coordinate, second_coordinate):
     return abs(first_coordinate["x"] - second_coordinate["x"]) + abs(first_coordinate["y"] - second_coordinate["y"])
 
 
+def pick_random_move(move_list):
+    return random.choice(move_list)
+
+
+def pick_only_move(move_coordinates_dict):
+    # If there's only one move available, do it.
+    if len(move_coordinates_dict) == 1:
+        return list(move_coordinates_dict.keys())[0]
+    else:
+        return None
+
+
+def eliminate_enclosed_space_moves(move_coordinates_dict, board_width, board_height, all_snakes):
+    check_for_enclosed_spaces(move_coordinates_dict, board_width, board_height, all_snakes)
+    max_space = max([x["space"] for x in move_coordinates_dict.values()])
+    move_coordinates_dict = {k: v for k, v in move_coordinates_dict.items() if v["space"] == max_space}
+    return move_coordinates_dict
+
+
+def pick_winning_collision_move(move_coordinates_dict, board_width, board_height, all_snakes):
+    # print(move_coordinates_dict)
+    winning_collisions_dict = {k: v for k, v in move_coordinates_dict.items() if v["collision_type"] == "winning"}
+    # print(winning_collisions_dict)
+    if len(winning_collisions_dict) == 0:
+        return None
+    winning_collisions_dict = eliminate_enclosed_space_moves(winning_collisions_dict, board_width, board_height, all_snakes)
+    return pick_random_move(list(winning_collisions_dict.keys()))
+
+
 def choose_next_move(move_coordinates_dict, my_head, food_coordinates, board_width, board_height, all_snakes):
     # If there are no safe moves it doesn't matter which way we go so just move down.
     if len(move_coordinates_dict) == 0:
         print("No safe moves detected! Moving down")
         return "down"
-    # If there's only one safe move, do it.
-    if len(move_coordinates_dict) == 1:
-        return list(move_coordinates_dict.keys())[0]
-
-    # If there are multiple safe moves, eliminate ones that might send us into an enclosed space
-    check_for_enclosed_spaces(move_coordinates_dict, board_width, board_height, all_snakes)
-    print(move_coordinates_dict)
-    max_space = max([x["space"] for x in move_coordinates_dict.values()])
-    move_coordinates_dict = {k: v for k, v in move_coordinates_dict.items() if v["space"] == max_space}
-    print(move_coordinates_dict)
-
-    # Of the remaining safe moves, first consider any that can't result in a head-on collision
+    # If there's only one move available do that
+    prospective_move = pick_only_move(move_coordinates_dict)
+    if prospective_move:
+        return prospective_move
+    # Take winning head-on collision moves if there are any
+    prospective_move = pick_winning_collision_move(move_coordinates_dict, board_width, board_height, all_snakes)
+    if prospective_move:
+        return prospective_move
+    # Don't get trapped in a dead end
+    move_coordinates_dict = eliminate_enclosed_space_moves(move_coordinates_dict, board_width, board_height,
+                                                             all_snakes)
+    # Of the remaining safe moves, first consider any that can't result in head-on collision
     non_collision_moves_list = [x for x in list(move_coordinates_dict.keys()) if
-                                not move_coordinates_dict[x]["possible_head_on_collision"]]
+                                not (move_coordinates_dict[x]["collision_type"] == "losing" or move_coordinates_dict[x]["collision_type"] == "equal")]
     collision_moves_list = [x for x in list(move_coordinates_dict.keys()) if
-                                move_coordinates_dict[x]["possible_head_on_collision"]]
+                                move_coordinates_dict[x]["collision_type"]]
     food_distance_list = identify_closest_food(my_head, food_coordinates)
     # Move closer to food if possible, otherwise move randomly of the available choices
     for food in food_distance_list:
@@ -190,31 +245,28 @@ def choose_next_move(move_coordinates_dict, my_head, food_coordinates, board_wid
 # Valid moves are "up", "down", "left", or "right"
 # See https://docs.battlesnake.com/api/example-move for available data
 def move(game_state: typing.Dict) -> typing.Dict:
+    print(game_state)
     my_body = game_state["you"]["body"]  # Coordinates of my whole snake
     my_head = game_state["you"]["head"]  # Coordinates of my snake's head
     move_coordinates_dict = {"left": {"coordinates": {"x": my_head["x"] - 1, "y": my_head["y"]},
-                                      "space": 0, "possible_head_on_collision": False},
+                                      "space": 0, "collision_type": None},
                              "right": {"coordinates": {"x": my_head["x"] + 1, "y": my_head["y"]},
-                                       "space": 0, "possible_head_on_collision": False},
+                                       "space": 0, "collision_type": None},
                              "up": {"coordinates": {"x": my_head["x"], "y": my_head["y"] + 1},
-                                    "space": 0, "possible_head_on_collision": False},
+                                    "space": 0, "collision_type": None},
                              "down": {"coordinates": {"x": my_head["x"], "y": my_head["y"] - 1},
-                                      "space": 0, "possible_head_on_collision": False}
+                                      "space": 0, "collision_type": None}
                              }
     all_snakes = game_state["board"]["snakes"]
-    enemy_snakes = [x for x in all_snakes if x["id"] != game_state["you"]["id"]]
-    my_length = game_state["you"]["length"]
     board_width = game_state['board']['width']
     board_height = game_state['board']['height']
-    print(move_coordinates_dict)
+    # print(move_coordinates_dict)
     move_coordinates_dict = eliminate_backwards_move(move_coordinates_dict, my_body[1])
-    print(move_coordinates_dict)
+    # print(move_coordinates_dict)
     move_coordinates_dict = eliminate_out_of_bounds_moves(move_coordinates_dict, board_height, board_width)
-    print(move_coordinates_dict)
-    move_coordinates_dict = eliminate_self_collision_moves(move_coordinates_dict, my_body)
-    print(move_coordinates_dict)
-    move_coordinates_dict = eliminate_enemy_collision_moves(move_coordinates_dict, my_length, enemy_snakes)
-    print(move_coordinates_dict)
+    # print(move_coordinates_dict)
+    move_coordinates_dict = eliminate_collision_moves(move_coordinates_dict, all_snakes, game_state["you"])
+    # print(move_coordinates_dict)
     next_move = choose_next_move(move_coordinates_dict, my_head, game_state["board"]["food"], board_width, board_height, all_snakes)
     print(f"MOVE {game_state['turn']}: {next_move}")
     return {"move": next_move}
