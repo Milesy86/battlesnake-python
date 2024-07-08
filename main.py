@@ -196,11 +196,12 @@ def eliminate_enclosed_space_moves(move_coordinates_dict, board_width, board_hei
 
 def pick_winning_collision_move(move_coordinates_dict, board_width, board_height, all_snakes):
     # print(move_coordinates_dict)
-    winning_collisions_dict = {k: v for k, v in move_coordinates_dict.items() if v["collision_type"] == "winning"}
+    winning_collisions_dict = eliminate_enclosed_space_moves(move_coordinates_dict, board_width, board_height,
+                                                             all_snakes)
+    winning_collisions_dict = {k: v for k, v in winning_collisions_dict.items() if v["collision_type"] == "winning"}
     # print(winning_collisions_dict)
     if len(winning_collisions_dict) == 0:
         return None
-    winning_collisions_dict = eliminate_enclosed_space_moves(winning_collisions_dict, board_width, board_height, all_snakes)
     return pick_random_move(list(winning_collisions_dict.keys()))
 
 
@@ -223,8 +224,10 @@ def choose_next_move(move_coordinates_dict, my_head, food_coordinates, board_wid
     # Of the remaining safe moves, first consider any that can't result in head-on collision
     non_collision_moves_list = [x for x in list(move_coordinates_dict.keys()) if
                                 not (move_coordinates_dict[x]["collision_type"] == "losing" or move_coordinates_dict[x]["collision_type"] == "equal")]
+    equal_collision_moves_list = [x for x in list(move_coordinates_dict.keys()) if
+                                    move_coordinates_dict[x]["collision_type"] == "equal"]
     collision_moves_list = [x for x in list(move_coordinates_dict.keys()) if
-                                move_coordinates_dict[x]["collision_type"]]
+                            move_coordinates_dict[x]["collision_type"]]
     food_distance_list = identify_closest_food(my_head, food_coordinates)
     # Move closer to food if possible, otherwise move randomly of the available choices
     for food in food_distance_list:
@@ -234,7 +237,13 @@ def choose_next_move(move_coordinates_dict, my_head, food_coordinates, board_wid
         # If there are non-collision moves but none move closer to food, pick from them at random
         if len(non_collision_moves_list) != 0:
             return random.choice(non_collision_moves_list)
-        # Now consider possible head-on collision moves, choosing to move closer to food if possible.
+        # Now consider possible head-on collision moves, choosing to move closer to food if possible
+        # And considering equal collisions before losing ones
+        if len(equal_collision_moves_list) != 0:
+            for direction in equal_collisions_list:
+                if calculate_distance_between(food["location"], equal_collisions_list[direction]["coordinates"]) < food[
+                        "distance"]:
+                    return direction
         for direction in collision_moves_list:
             if calculate_distance_between(food["location"], move_coordinates_dict[direction]["coordinates"]) < food["distance"]:
                 return direction
