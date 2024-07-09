@@ -240,8 +240,8 @@ def choose_next_move(move_coordinates_dict, my_head, food_coordinates, board_wid
         # Now consider possible head-on collision moves, choosing to move closer to food if possible
         # And considering equal collisions before losing ones
         if len(equal_collision_moves_list) != 0:
-            for direction in equal_collisions_list:
-                if calculate_distance_between(food["location"], equal_collisions_list[direction]["coordinates"]) < food[
+            for direction in equal_collision_moves_list:
+                if calculate_distance_between(food["location"], equal_collision_moves_list[direction]["coordinates"]) < food[
                         "distance"]:
                     return direction
         for direction in collision_moves_list:
